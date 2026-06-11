@@ -1,9 +1,20 @@
 import axios from 'axios'
 
 const normalizeBaseUrl = (value) => {
-  if (!value) return 'http://127.0.0.1:5000'
-  if (/^https?:\/\//i.test(value)) return value
-  return `https://${value}`
+  const text = String(value || '').trim()
+  if (text) {
+    if (/^https?:\/\//i.test(text)) return text.replace(/\/$/, '')
+    return `https://${text.replace(/\/$/, '')}`
+  }
+
+  if (typeof window !== 'undefined') {
+    const { protocol, hostname } = window.location
+    if (hostname.endsWith('.onrender.com') && hostname.includes('-web')) {
+      return `${protocol}//${hostname.replace('-web', '-api')}`
+    }
+  }
+
+  return 'http://127.0.0.1:5000'
 }
 
 const api = axios.create({

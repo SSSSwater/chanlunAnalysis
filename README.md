@@ -62,9 +62,11 @@ Manual steps:
 4. Select the root `render.yaml` and create the Blueprint.
 5. Wait for both services to deploy once.
 6. Copy the public URL of `chanlun-analysis-api`, for example `https://chanlun-analysis-api.onrender.com`.
-7. Open `chanlun-analysis-web` -> Environment, set `VITE_API_BASE_URL` to the backend public URL.
-8. Redeploy `chanlun-analysis-web`.
+7. Open `chanlun-analysis-web` -> Environment. If the frontend cannot reach the backend, set `VITE_API_BASE_URL` to the backend public URL.
+8. Redeploy `chanlun-analysis-web` after changing environment variables.
 9. Open the `chanlun-analysis-web` Render URL.
+
+When `VITE_API_BASE_URL` is not set on Render, the frontend tries to infer the backend URL by replacing `-web.onrender.com` with `-api.onrender.com`. This matches the service names in `render.yaml`. If you rename either service, set `VITE_API_BASE_URL` manually.
 
 If you create services manually instead of using Blueprint:
 
