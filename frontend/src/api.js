@@ -1,7 +1,13 @@
 import axios from 'axios'
 
+const normalizeBaseUrl = (value) => {
+  if (!value) return 'http://127.0.0.1:5000'
+  if (/^https?:\/\//i.test(value)) return value
+  return `https://${value}`
+}
+
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:5000',
+  baseURL: normalizeBaseUrl(import.meta.env.VITE_API_BASE_URL),
   timeout: 240000,
 })
 

@@ -1,25 +1,25 @@
 # Chanlun Analysis
 
-缠论股票分析系统。后端使用 Flask + akshare 获取行情并完成全部计算，前端使用 Vue 3 + Element Plus + Chart.js 展示日 K、合并 K、笔线、中枢、买卖点、未来锚点和日内短线信号。
+A Flask + Vue stock analysis application. The backend uses akshare and performs all calculations. The frontend uses Vue 3, Element Plus, and Chart.js for interaction and visualization.
 
-## 功能
+## Features
 
-- 股票代码或名称搜索候选。
-- 上证指数自动分析，个股独立分析。
-- 近一年日 K 缠论分析：K 线合并、笔线、中枢、三类买卖点、未来潜在买卖锚点。
-- 30 分钟、15 分钟、5 分钟日内短线分析：RSI、EMA、MACD 辅助判断短线买卖点。
-- 图表区间滑动、成交量柱、悬停行情信息、买卖点点击定位。
-- 后端完成所有计算，前端只负责交互和展示。
+- Stock code/name search.
+- Automatic Shanghai Composite analysis and independent stock analysis.
+- Daily Chanlun analysis for the latest year: merged K-lines, strokes, centers, buy/sell points, and future anchors.
+- Intraday short-term analysis on 30-minute, 15-minute, and 5-minute K-lines using RSI, EMA, and MACD.
+- Volume bars, horizontal chart window slider, hover market data, and signal-row click focusing.
+- All calculation logic runs on the backend. The frontend only displays backend results.
 
-## 本地启动
+## Local Development
 
-一键启动：
+One-click start on Windows:
 
 ```powershell
 .\start.bat
 ```
 
-手动启动后端：
+Backend:
 
 ```powershell
 python -m venv venv
@@ -28,7 +28,7 @@ pip install -r backend\requirements.txt
 python -m flask --app backend.app run --host 127.0.0.1 --port 5000 --with-threads
 ```
 
-手动启动前端：
+Frontend:
 
 ```powershell
 cd frontend
@@ -36,28 +36,63 @@ npm install
 npm run dev
 ```
 
-默认地址：
+Default URLs:
 
-- 前端：http://127.0.0.1:5173
-- 后端：http://127.0.0.1:5000
+- Frontend: http://127.0.0.1:5173
+- Backend: http://127.0.0.1:5000
 
-## GitHub Pages 部署
+## Render Deployment
 
-仓库内已包含 `.github/workflows/pages.yml`，会在推送到 `main` 或 `master` 后构建 `frontend` 并发布到 GitHub Pages。
+The repository includes `render.yaml` for a Render Blueprint with two services:
 
-注意：GitHub Pages 只能托管静态前端，不能运行 Flask 后端，也不能直接执行 akshare。要让线上页面可用，需要把 `backend` 单独部署到支持 Python 服务的平台，例如云服务器、Render、Railway、Fly.io 或其他容器平台。
+- `chanlun-analysis-api`: Flask backend Web Service
+- `chanlun-analysis-web`: Vue frontend Static Site
 
-部署步骤：
+Backend production start command:
 
-1. 在 GitHub 仓库 Settings -> Pages 中，Source 选择 `GitHub Actions`。
-2. 单独部署 Flask 后端，并确保后端允许 Pages 域名跨域访问。
-3. 在 GitHub 仓库 Settings -> Secrets and variables -> Actions -> Variables 中新增：
-   - `VITE_API_BASE_URL`
-   - 值填写你的后端公网地址，例如 `https://your-api.example.com`
-4. 推送代码到 GitHub，等待 `Deploy frontend to GitHub Pages` workflow 完成。
+```bash
+gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 8 --timeout 300
+```
 
-如果没有配置 `VITE_API_BASE_URL`，Pages 上的前端会仍然尝试请求默认的 `http://127.0.0.1:5000`，这只适用于本机开发。
+Manual steps:
 
-## 说明
+1. Sign in to Render.
+2. Click `New +` -> `Blueprint`.
+3. Connect the GitHub repository `SSSSwater/chanlunAnalysis`.
+4. Select the root `render.yaml` and create the Blueprint.
+5. Wait for both services to deploy once.
+6. Copy the public URL of `chanlun-analysis-api`, for example `https://chanlun-analysis-api.onrender.com`.
+7. Open `chanlun-analysis-web` -> Environment, set `VITE_API_BASE_URL` to the backend public URL.
+8. Redeploy `chanlun-analysis-web`.
+9. Open the `chanlun-analysis-web` Render URL.
 
-买卖点识别是工程化启发式分析，用于辅助观察，不构成投资建议。
+If you create services manually instead of using Blueprint:
+
+Backend Web Service:
+
+- Root Directory: `backend`
+- Runtime: `Python`
+- Build Command: `pip install -r requirements.txt`
+- Start Command: `gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 8 --timeout 300`
+- Health Check Path: `/api/health`
+
+Frontend Static Site:
+
+- Root Directory: `frontend`
+- Build Command: `npm ci && npm run build`
+- Publish Directory: `dist`
+- Environment Variable: `VITE_API_BASE_URL=https://your-backend-public-url`
+
+## GitHub Pages
+
+The repository also includes `.github/workflows/pages.yml` for deploying the frontend to GitHub Pages.
+
+GitHub Pages can only host the static frontend. It cannot run Flask or akshare. If using GitHub Pages, deploy the backend separately and set the repository Actions variable:
+
+- `VITE_API_BASE_URL=https://your-backend-public-url`
+
+Without `VITE_API_BASE_URL`, the frontend defaults to `http://127.0.0.1:5000`, which is only valid for local development.
+
+## Disclaimer
+
+Signal detection is heuristic analysis for observation and research only. It is not investment advice.
