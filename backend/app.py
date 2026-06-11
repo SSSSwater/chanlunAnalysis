@@ -37,6 +37,26 @@ app = Flask(__name__)
 CORS(app)
 
 
+@app.get("/")
+def root():
+    return jsonify(
+        {
+            "service": "chanlun-analysis-api",
+            "status": "ok",
+            "health": "/api/health",
+            "routes": [
+                "/api/stocks",
+                "/api/stocks/search",
+                "/api/stocks/find-good",
+                "/api/analyze",
+                "/api/index/analyze",
+                "/api/intraday/analyze",
+                "/api/index/intraday/analyze",
+            ],
+        }
+    )
+
+
 @app.get("/api/health")
 def health():
     return jsonify({"status": "ok"})
