@@ -257,6 +257,15 @@ h1 {
   flex: 1;
 }
 
+.chart-switches {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 280px;
+}
+
 .hover-kline-head {
   display: flex;
   align-items: flex-start;

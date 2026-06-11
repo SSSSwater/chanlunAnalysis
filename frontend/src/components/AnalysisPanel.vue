@@ -35,11 +35,20 @@
           </div>
           <p>{{ chartSubtitle }}</p>
         </div>
-        <el-segmented v-model="displayMode" :options="modeOptions" />
+        <div class="chart-switches">
+          <el-segmented v-model="analysisMode" :options="analysisModeOptions" />
+        <el-segmented
+          v-if="analysisMode === 'intraday'"
+          v-model="intradayPeriod"
+          :options="intradayPeriodOptions"
+          :disabled="intradayLoading"
+        />
+          <el-segmented v-if="analysisMode === 'daily'" v-model="displayMode" :options="modeOptions" />
+        </div>
       </div>
 
       <div
-        v-loading="loading"
+        v-loading="loading || intradayLoading"
         ref="chartFrame"
         class="chart-frame"
         @mouseleave="resetHoverKline"
@@ -52,6 +61,7 @@
           @pointerleave="resetHoverKline"
         ></canvas>
         <el-empty v-if="!result && !loading" :description="emptyText" />
+        <el-empty v-else-if="result && !currentBars.length && !loading && !intradayLoading" description="暂无该周期短线数据" />
       </div>
 
       <div v-if="result" class="range-panel">
@@ -73,7 +83,7 @@
 
     <section class="signals-section">
       <div class="section-title">
-        <h3>买卖点与未来锚点</h3>
+        <h3>{{ signalSectionTitle }}</h3>
         <el-tag v-if="latestSignal" :type="latestSignal.direction === 'buy' ? 'success' : 'danger'">
           最新：{{ signalName(latestSignal.type) }}
         </el-tag>
@@ -201,6 +211,10 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  loadIntraday: {
+    type: Function,
+    default: null,
+  },
   title: {
     type: String,
     default: '等待分析',
@@ -212,6 +226,8 @@ const props = defineProps({
 })
 
 const displayMode = ref('raw')
+const analysisMode = ref('daily')
+const intradayPeriod = ref('30')
 const chartCanvas = ref(null)
 const chartFrame = ref(null)
 const chartKey = ref(0)
@@ -219,18 +235,34 @@ const visibleRange = ref([0, 0])
 const chartDataCache = ref(null)
 const reasonPopoverVisible = ref({})
 const hoverKline = ref(null)
+const intradayLoading = ref(false)
 let chartInstance = null
 
 const modeOptions = [
   { label: '原始 K 线', value: 'raw' },
   { label: '合并 K 线', value: 'merged' },
 ]
+const analysisModeOptions = [
+  { label: '日线', value: 'daily' },
+  { label: '日内', value: 'intraday' },
+]
+const intradayPeriodOptions = [
+  { label: '30分钟', value: '30' },
+  { label: '15分钟', value: '15' },
+  { label: '5分钟', value: '5' },
+]
 
 const summary = computed(() => props.result?.summary)
-const signals = computed(() => props.result?.signals || [])
-const signalRows = computed(() => props.result?.signalRows || props.result?.signals || [])
-const futureSignals = computed(() => props.result?.futureSignals || [])
-const centers = computed(() => props.result?.centers || [])
+const intradayData = computed(() => props.result?.intraday?.periods?.[intradayPeriod.value] || null)
+const activeSummary = computed(() => (analysisMode.value === 'intraday' ? intradayData.value?.summary : summary.value))
+const signals = computed(() => (analysisMode.value === 'intraday' ? intradayData.value?.signals || [] : props.result?.signals || []))
+const signalRows = computed(() =>
+  analysisMode.value === 'intraday'
+    ? intradayData.value?.signalRows || intradayData.value?.signals || []
+    : props.result?.signalRows || props.result?.signals || [],
+)
+const futureSignals = computed(() => (analysisMode.value === 'intraday' ? [] : props.result?.futureSignals || []))
+const centers = computed(() => (analysisMode.value === 'intraday' ? [] : props.result?.centers || []))
 const sortedSignals = computed(() =>
   [...signalRows.value].sort((a, b) => {
     if (b.date !== a.date) return b.date.localeCompare(a.date)
@@ -247,9 +279,11 @@ const displaySignals = computed(() =>
     return (b.index ?? 0) - (a.index ?? 0)
   }),
 )
-const latestSignal = computed(() => summary.value?.latestSignal)
+const latestSignal = computed(() => activeSummary.value?.latestSignal)
+const signalSectionTitle = computed(() => (analysisMode.value === 'intraday' ? '日内短线买卖点' : '买卖点与未来锚点'))
 const currentBars = computed(() => {
   if (!props.result) return []
+  if (analysisMode.value === 'intraday') return intradayData.value?.rawKlines || []
   return displayMode.value === 'raw' ? props.result.rawKlines : props.result.mergedKlines
 })
 const rangeMax = computed(() => Math.max((currentBars.value.length || 1) - 1, 0))
@@ -269,6 +303,12 @@ const resolvedPctChange = computed(() => {
 const hoverTitle = computed(() => props.result?.name ? `${props.result.symbol || ''} - ${props.result.name}` : props.title)
 const chartSubtitle = computed(() => {
   if (!props.result) return '后端完成全部计算，前端仅渲染分析结果'
+  if (analysisMode.value === 'intraday') {
+    if (intradayLoading.value) return `${intradayPeriod.value} 分钟短线数据加载中`
+    const range = intradayData.value?.dateRange
+    if (!range?.start) return '暂无该周期短线数据'
+    return `${intradayPeriod.value} 分钟 ${range.start} - ${range.end}`
+  }
   return `${props.result.dateRange.start} - ${props.result.dateRange.end}`
 })
 const visibleRangeText = computed(() => {
@@ -294,6 +334,10 @@ const signalName = (type) => {
     future_center_sell: '中枢减仓',
     future_reclaim_buy: '站回转强',
     future_stop_loss: '跌破风控',
+    intraday_rebound_buy: '\u65e5\u5185\u53cd\u5f39\u4e70',
+    intraday_trend_buy: '\u65e5\u5185\u8d8b\u52bf\u4e70',
+    intraday_pullback_sell: '\u65e5\u5185\u56de\u843d\u5356',
+    intraday_trend_sell: '\u65e5\u5185\u8d8b\u52bf\u5356',
   }
   return names[type] || type
 }
@@ -433,12 +477,20 @@ const centerPlugin = {
 const renderChart = () => {
   if (!chartCanvas.value || !props.result) return
   const bars = currentBars.value
-  if (!bars.length) return
+  if (!bars.length) {
+    chartDataCache.value = null
+    chartInstance?.destroy()
+    chartInstance = null
+    chartKey.value += 1
+    return
+  }
   const labels = bars.map((item) => item.date || item.endDate)
   const displayIndexByDate = new Map(labels.map((label, index) => [label, index]))
   const displayIndexByRawIndex = new Map()
   bars.forEach((item, index) => {
     if (displayMode.value === 'raw') {
+      displayIndexByRawIndex.set(index, index)
+    } else if (analysisMode.value === 'intraday') {
       displayIndexByRawIndex.set(index, index)
     } else {
       for (let rawIndex = item.startIndex; rawIndex <= item.endIndex; rawIndex += 1) {
@@ -468,7 +520,8 @@ const renderChart = () => {
     return signal.direction === 'buy' ? candle.l - spread * 0.32 : candle.h + spread * 0.32
   }
   const strokePoints = []
-  props.result.strokes.forEach((stroke, index) => {
+  const activeStrokes = analysisMode.value === 'intraday' ? [] : props.result.strokes || []
+  activeStrokes.forEach((stroke, index) => {
     const startX = xOfRawIndex(stroke.startIndex, stroke.startDate)
     const endX = xOfRawIndex(stroke.endIndex, stroke.endDate)
     if (startX == null || endX == null) return
@@ -520,7 +573,7 @@ const drawChart = ({ bars, labels, candles, volumes, strokePoints, signalPoints,
       datasets: [
         {
           type: 'candlestick',
-          label: displayMode.value === 'raw' ? '日 K' : '合并 K',
+          label: analysisMode.value === 'intraday' ? `${intradayPeriod.value}分钟K` : displayMode.value === 'raw' ? '日 K' : '合并 K',
           data: candles,
           parsing: false,
           normalized: true,
@@ -696,12 +749,16 @@ const resetVisibleRange = () => {
     visibleRange.value = [0, 0]
     return
   }
-  const windowSize = Math.min(count, displayMode.value === 'raw' ? 90 : 70)
+  const windowSize = Math.min(count, analysisMode.value === 'intraday' ? 80 : displayMode.value === 'raw' ? 90 : 70)
   visibleRange.value = [Math.max(0, count - windowSize), count - 1]
 }
 
 const focusSignalRow = (row) => {
   if (displayMode.value !== 'raw') {
+    if (analysisMode.value === 'intraday') {
+      focusSignalRange(row)
+      return
+    }
     displayMode.value = 'raw'
     nextTick(() => focusSignalRange(row))
     return
@@ -710,8 +767,8 @@ const focusSignalRow = (row) => {
 }
 
 const focusSignalRange = (row) => {
-  if (!row || !props.result?.rawKlines?.length) return
-  const bars = props.result.rawKlines
+  const bars = currentBars.value
+  if (!row || !bars.length) return
   const targetIndex = findSignalBarIndex(row, bars)
   if (targetIndex == null) return
   const windowSize = Math.min(34, bars.length)
@@ -798,6 +855,27 @@ watch(displayMode, () => {
   hoverKline.value = null
   nextTick(renderChart)
 })
+
+watch([analysisMode, intradayPeriod], () => {
+  resetVisibleRange()
+  hoverKline.value = null
+  ensureIntradayData()
+  nextTick(renderChart)
+})
+
+const ensureIntradayData = async () => {
+  if (analysisMode.value !== 'intraday' || !props.result || !props.loadIntraday) return
+  if (props.result?.intraday?.periods?.[intradayPeriod.value]?.rawKlines?.length) return
+  intradayLoading.value = true
+  try {
+    await props.loadIntraday(intradayPeriod.value)
+  } finally {
+    intradayLoading.value = false
+    resetVisibleRange()
+    await nextTick()
+    renderChart()
+  }
+}
 
 onBeforeUnmount(() => {
   window.removeEventListener('pointermove', handlePointerMove)

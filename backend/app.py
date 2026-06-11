@@ -9,8 +9,11 @@ from flask_cors import CORS
 
 try:
     from .services.chanlun import analyze_chanlun
+    from .services.intraday import PERIODS, analyze_intraday
     from .services.stock_data import (
+        get_index_intraday_history,
         get_index_history,
+        get_stock_intraday_history,
         get_stock_history,
         list_price_limited_non_st_stocks,
         list_stocks,
@@ -18,8 +21,11 @@ try:
     )
 except ImportError:
     from services.chanlun import analyze_chanlun
+    from services.intraday import PERIODS, analyze_intraday
     from services.stock_data import (
+        get_index_intraday_history,
         get_index_history,
+        get_stock_intraday_history,
         get_stock_history,
         list_price_limited_non_st_stocks,
         list_stocks,
@@ -148,6 +154,7 @@ def analyze():
             "start": history[0]["date"],
             "end": history[-1]["date"],
         }
+        result["intraday"] = {"periods": {}, "summary": {"periodCount": 0, "signalCount": 0}, "errors": {}}
         return jsonify(result)
     except Exception as exc:
         return jsonify({"message": f"分析失败：{exc}"}), 500
@@ -176,9 +183,32 @@ def analyze_index():
             "start": history[0]["date"],
             "end": history[-1]["date"],
         }
+        result["intraday"] = {"periods": {}, "summary": {"periodCount": 0, "signalCount": 0}, "errors": {}}
         return jsonify(result)
     except Exception as exc:
         return jsonify({"message": f"指数分析失败：{exc}"}), 500
+
+
+@app.get("/api/intraday/analyze")
+def analyze_intraday_stock():
+    symbol = request.args.get("symbol", "").strip()
+    period = request.args.get("period", "").strip()
+    if not symbol:
+        return jsonify({"message": "??????"}), 400
+    try:
+        return jsonify(_build_intraday_analysis(symbol, is_index=False, periods=[period] if period else None))
+    except Exception as exc:
+        return jsonify({"message": f"???????{exc}"}), 500
+
+
+@app.get("/api/index/intraday/analyze")
+def analyze_intraday_index():
+    symbol = request.args.get("symbol", "000001").strip() or "000001"
+    period = request.args.get("period", "").strip()
+    try:
+        return jsonify(_build_intraday_analysis(symbol, is_index=True, periods=[period] if period else None))
+    except Exception as exc:
+        return jsonify({"message": f"?????????{exc}"}), 500
 
 
 def _match_future_buy(result: dict, threshold: float, current_price: float | None = None) -> dict | None:
@@ -224,6 +254,33 @@ def _match_future_buy(result: dict, threshold: float, current_price: float | Non
     if not matches:
         return None
     return sorted(matches, key=lambda item: item["distancePct"])[0]
+
+
+def _build_intraday_analysis(symbol: str, is_index: bool, periods: list[str] | None = None) -> dict:
+    end_date = datetime.now().date()
+    start_date = end_date - timedelta(days=12)
+    period_bars: dict[str, list[dict]] = {}
+    errors: dict[str, str] = {}
+
+    target_periods = [period for period in (periods or list(PERIODS)) if period in PERIODS]
+
+    for period in target_periods:
+        try:
+            fetcher = get_index_intraday_history if is_index else get_stock_intraday_history
+            bars = fetcher(
+                symbol=symbol,
+                period=period,
+                start_date=start_date.strftime("%Y%m%d"),
+                end_date=end_date.strftime("%Y%m%d"),
+            )
+            if bars:
+                period_bars[period] = bars[-180:]
+        except Exception as exc:
+            errors[period] = str(exc)
+
+    result = analyze_intraday(period_bars)
+    result["errors"] = errors
+    return result
 
 
 def _nearest_above_sell(latest_price: float, buy_price: float, sell_signals: list[dict]) -> dict | None:

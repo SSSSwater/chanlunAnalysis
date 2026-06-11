@@ -20,6 +20,11 @@ export const analyzeStock = async (symbol) => {
   return data
 }
 
+export const analyzeStockIntraday = async (symbol, period) => {
+  const { data } = await api.get('/api/intraday/analyze', { params: { symbol, period } })
+  return data
+}
+
 export const findGoodStock = async ({ minPrice, maxPrice }, options = {}) => {
   const { data } = await api.get('/api/stocks/find-good', {
     params: {
@@ -34,5 +39,10 @@ export const findGoodStock = async ({ minPrice, maxPrice }, options = {}) => {
 
 export const analyzeIndex = async () => {
   const { data } = await api.get('/api/index/analyze')
+  return data
+}
+
+export const analyzeIndexIntraday = async (period) => {
+  const { data } = await api.get('/api/index/intraday/analyze', { params: { period } })
   return data
 }

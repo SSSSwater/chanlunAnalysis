@@ -17,6 +17,7 @@
         title="上证指数"
         :result="indexResult"
         :loading="indexLoading"
+        :load-intraday="loadIndexIntraday"
         empty-text="正在自动分析上证指数"
       >
         <template #info>
@@ -34,6 +35,7 @@
         :title="selectedLabel || '个股分析'"
         :result="stockResult"
         :loading="stockLoading"
+        :load-intraday="loadStockIntraday"
         empty-text="输入股票后查看个股缠论图表"
       >
         <template #info>
@@ -124,7 +126,15 @@ import { computed, defineComponent, h, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Activity, Search } from 'lucide-vue-next'
 import AnalysisPanel from './components/AnalysisPanel.vue'
-import { analyzeIndex, analyzeStock, fetchStocks, findGoodStock, searchStocks } from './api'
+import {
+  analyzeIndex,
+  analyzeIndexIntraday,
+  analyzeStock,
+  analyzeStockIntraday,
+  fetchStocks,
+  findGoodStock,
+  searchStocks,
+} from './api'
 
 const keyword = ref('')
 const selectedStock = ref(null)
@@ -294,6 +304,42 @@ const loadIndex = async () => {
     ElMessage.error(error.response?.data?.message || '上证指数分析失败')
   } finally {
     indexLoading.value = false
+  }
+}
+
+
+const mergeIntradayResult = (target, intraday) => {
+  if (!target || !intraday) return
+  target.intraday = {
+    periods: {
+      ...(target.intraday?.periods || {}),
+      ...(intraday.periods || {}),
+    },
+    summary: intraday.summary || target.intraday?.summary || {},
+    errors: {
+      ...(target.intraday?.errors || {}),
+      ...(intraday.errors || {}),
+    },
+  }
+}
+
+const loadIndexIntraday = async (period) => {
+  if (!indexResult.value) return
+  try {
+    const intraday = await analyzeIndexIntraday(period)
+    mergeIntradayResult(indexResult.value, intraday)
+  } catch (error) {
+    ElMessage.error(error.response?.data?.message || '指数日内分析失败')
+  }
+}
+
+const loadStockIntraday = async (period) => {
+  if (!stockResult.value?.symbol) return
+  try {
+    const intraday = await analyzeStockIntraday(stockResult.value.symbol, period)
+    mergeIntradayResult(stockResult.value, intraday)
+  } catch (error) {
+    ElMessage.error(error.response?.data?.message || '日内分析失败')
   }
 }
 

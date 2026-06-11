@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import time
 from functools import lru_cache
+from datetime import time as datetime_time
 from typing import Callable
 
 import akshare as ak
@@ -178,9 +179,21 @@ def get_stock_history(symbol: str, start_date: str, end_date: str) -> list[dict]
     return _history_to_items(df)
 
 
+def get_stock_intraday_history(symbol: str, period: str, start_date: str, end_date: str) -> list[dict]:
+    normalized = _normalize_symbol(symbol)
+    df = _fetch_intraday_history(normalized, period, start_date, end_date)
+    return _history_to_items(df)
+
+
 def get_index_history(symbol: str = "000001", start_date: str = "", end_date: str = "") -> list[dict]:
     normalized = _normalize_symbol(symbol) or "000001"
     df = _fetch_index_history(normalized, start_date, end_date)
+    return _history_to_items(df, start_date=start_date, end_date=end_date)
+
+
+def get_index_intraday_history(symbol: str = "000001", period: str = "15", start_date: str = "", end_date: str = "") -> list[dict]:
+    normalized = _normalize_symbol(symbol) or "000001"
+    df = _fetch_index_intraday_history(normalized, period, start_date, end_date)
     return _history_to_items(df, start_date=start_date, end_date=end_date)
 
 
@@ -189,13 +202,16 @@ def _history_to_items(df: pd.DataFrame, start_date: str = "", end_date: str = ""
         return []
 
     df = _normalize_history_columns(df)
+    df["_date_filter"] = pd.to_datetime(df["date"])
     if start_date:
-        start_text = pd.to_datetime(start_date).strftime("%Y-%m-%d")
-        df = df[df["date"] >= start_text]
+        start_dt = pd.to_datetime(start_date)
+        df = df[df["_date_filter"] >= start_dt]
     if end_date:
-        end_text = pd.to_datetime(end_date).strftime("%Y-%m-%d")
-        df = df[df["date"] <= end_text]
-    df = df.sort_values("date").reset_index(drop=True)
+        end_dt = pd.to_datetime(end_date)
+        if len(str(end_date)) <= 10:
+            end_dt = end_dt + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
+        df = df[df["_date_filter"] <= end_dt]
+    df = df.sort_values("_date_filter").reset_index(drop=True)
 
     fields = ["date", "open", "high", "low", "close", "volume", "amount", "pct_change", "turnover_rate"]
     items: list[dict] = []
@@ -253,6 +269,29 @@ def _fetch_history(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
     raise RuntimeError("；".join(errors[-2:]) or "数据源无返回")
 
 
+def _fetch_intraday_history(symbol: str, period: str, start_date: str, end_date: str) -> pd.DataFrame:
+    errors: list[str] = []
+    fetchers = [
+        lambda: ak.stock_zh_a_hist_min_em(
+            symbol=symbol,
+            period=period,
+            start_date=_minute_datetime(start_date),
+            end_date=_minute_datetime(end_date, end_of_day=True),
+            adjust="qfq",
+        ),
+        lambda: ak.stock_zh_a_minute(symbol=_market_symbol(symbol), period=period, adjust="qfq"),
+    ]
+
+    for fetcher in fetchers:
+        df, error = _fetch_with_retries(fetcher, attempts=1)
+        if error:
+            errors.append(error)
+        if df is not None and not df.empty:
+            return df
+
+    raise RuntimeError("分钟数据源连续失败：" + ("；".join(errors[-2:]) or "数据源无返回"))
+
+
 def _fetch_index_history(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
     market_symbol = f"sh{_normalize_symbol(symbol)}"
     errors: list[str] = []
@@ -281,6 +320,40 @@ def _fetch_index_history(symbol: str, start_date: str, end_date: str) -> pd.Data
     raise RuntimeError("指数数据源连续失败：" + ("；".join(errors[-2:]) or "数据源无返回"))
 
 
+def _fetch_index_intraday_history(symbol: str, period: str, start_date: str, end_date: str) -> pd.DataFrame:
+    market_symbol = f"sh{_normalize_symbol(symbol)}" if _normalize_symbol(symbol).startswith("0") else _market_symbol(symbol)
+    errors: list[str] = []
+    fetchers = [
+        lambda: ak.index_zh_a_hist_min_em(
+            symbol=_normalize_symbol(symbol),
+            period=period,
+            start_date=_minute_datetime(start_date),
+            end_date=_minute_datetime(end_date, end_of_day=True),
+        ),
+        lambda: ak.stock_zh_a_minute(symbol=market_symbol, period=period, adjust=""),
+    ]
+
+    for fetcher in fetchers:
+        df, error = _fetch_with_retries(fetcher, attempts=1)
+        if error:
+            errors.append(error)
+        if df is not None and not df.empty:
+            return df
+
+    raise RuntimeError("指数分钟数据源连续失败：" + ("；".join(errors[-2:]) or "数据源无返回"))
+
+
+def _minute_datetime(value: str, end_of_day: bool = False) -> str:
+    if not value:
+        return ""
+    text = str(value)
+    if "-" in text and ":" in text:
+        return text
+    dt = pd.to_datetime(text)
+    suffix = "15:00:00" if end_of_day else "09:30:00"
+    return f"{dt.strftime('%Y-%m-%d')} {suffix}"
+
+
 def _fetch_with_retries(fetcher: Callable[[], pd.DataFrame], attempts: int = 2) -> tuple[pd.DataFrame | None, str | None]:
     last_error: Exception | None = None
     for attempt in range(attempts):
@@ -296,30 +369,40 @@ def _fetch_with_retries(fetcher: Callable[[], pd.DataFrame], attempts: int = 2) 
 def _normalize_history_columns(df: pd.DataFrame) -> pd.DataFrame:
     normalized = df.rename(
         columns={
-            "日期": "date",
-            "开盘": "open",
-            "收盘": "close",
-            "最高": "high",
-            "最低": "low",
-            "成交量": "volume",
-            "成交额": "amount",
-            "涨跌幅": "pct_change",
-            "换手率": "turnover_rate",
+            "\u65e5\u671f": "date",
+            "\u65f6\u95f4": "date",
+            "day": "date",
+            "\u5f00\u76d8": "open",
+            "\u6536\u76d8": "close",
+            "\u6700\u9ad8": "high",
+            "\u6700\u4f4e": "low",
+            "\u6210\u4ea4\u91cf": "volume",
+            "\u6210\u4ea4\u989d": "amount",
+            "\u6da8\u8dcc\u5e45": "pct_change",
+            "\u6362\u624b\u7387": "turnover_rate",
         }
     ).copy()
 
+    numeric_fields = ["open", "high", "low", "close", "volume", "amount", "pct_change", "turnover_rate"]
     if "volume" not in normalized.columns and "amount" in normalized.columns:
         normalized["volume"] = normalized["amount"]
     if "amount" not in normalized.columns:
         normalized["amount"] = 0
-    if "pct_change" not in normalized.columns:
-        normalized["pct_change"] = normalized["close"].pct_change().fillna(0) * 100
     if "turnover_rate" not in normalized.columns:
         normalized["turnover_rate"] = None
 
-    normalized["date"] = pd.to_datetime(normalized["date"]).dt.strftime("%Y-%m-%d")
-    numeric_fields = ["open", "high", "low", "close", "volume", "amount", "pct_change", "turnover_rate"]
     for field in numeric_fields:
-        normalized[field] = pd.to_numeric(normalized[field], errors="coerce")
+        if field in normalized.columns:
+            normalized[field] = pd.to_numeric(normalized[field], errors="coerce")
+
+    if "pct_change" not in normalized.columns or normalized["pct_change"].isna().all():
+        normalized["pct_change"] = normalized["close"].pct_change().fillna(0) * 100
+    else:
+        normalized["pct_change"] = normalized["pct_change"].fillna(0)
+
+    date_values = pd.to_datetime(normalized["date"])
+    has_intraday_time = (date_values.dt.time != datetime_time(0, 0)).any()
+    normalized["date"] = date_values.dt.strftime("%Y-%m-%d %H:%M" if has_intraday_time else "%Y-%m-%d")
 
     return normalized.dropna(subset=["date", "open", "high", "low", "close"])
+
