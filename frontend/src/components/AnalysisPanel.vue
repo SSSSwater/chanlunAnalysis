@@ -227,7 +227,7 @@ const props = defineProps({
 
 const displayMode = ref('raw')
 const analysisMode = ref('daily')
-const intradayPeriod = ref('30')
+const intradayPeriod = ref('15')
 const chartCanvas = ref(null)
 const chartFrame = ref(null)
 const chartKey = ref(0)
@@ -251,14 +251,24 @@ const intradayPeriodOptions = [
   { label: '15分钟', value: '15' },
   { label: '5分钟', value: '5' },
 ]
+const intradayPeriodValues = intradayPeriodOptions.map((item) => item.value)
 
 const summary = computed(() => props.result?.summary)
+const intradayPeriods = computed(() => props.result?.intraday?.periods || {})
 const intradayData = computed(() => props.result?.intraday?.periods?.[intradayPeriod.value] || null)
-const activeSummary = computed(() => (analysisMode.value === 'intraday' ? intradayData.value?.summary : summary.value))
-const signals = computed(() => (analysisMode.value === 'intraday' ? intradayData.value?.signals || [] : props.result?.signals || []))
+const intradaySignalRows = computed(() =>
+  [
+    ...(props.result?.signalRows || props.result?.signals || []).map((signal) => ({ ...signal, period: '日' })),
+    ...Object.values(intradayPeriods.value)
+      .flatMap((item) => item?.signalRows || item?.signals || [])
+      .map((signal) => ({ ...signal, period: signal.period || signal.periodName })),
+  ],
+)
+const activeSummary = computed(() => (analysisMode.value === 'intraday' ? props.result?.intraday?.summary : summary.value))
+const signals = computed(() => (analysisMode.value === 'intraday' ? intradaySignalRows.value : props.result?.signals || []))
 const signalRows = computed(() =>
   analysisMode.value === 'intraday'
-    ? intradayData.value?.signalRows || intradayData.value?.signals || []
+    ? intradaySignalRows.value
     : props.result?.signalRows || props.result?.signals || [],
 )
 const futureSignals = computed(() => (analysisMode.value === 'intraday' ? [] : props.result?.futureSignals || []))
@@ -279,7 +289,10 @@ const displaySignals = computed(() =>
     return (b.index ?? 0) - (a.index ?? 0)
   }),
 )
-const latestSignal = computed(() => activeSummary.value?.latestSignal)
+const latestSignal = computed(() => {
+  if (analysisMode.value !== 'intraday') return activeSummary.value?.latestSignal
+  return [...intradaySignalRows.value].sort((a, b) => String(b.date).localeCompare(String(a.date)))[0] || null
+})
 const signalSectionTitle = computed(() => (analysisMode.value === 'intraday' ? '日内短线买卖点' : '买卖点与未来锚点'))
 const currentBars = computed(() => {
   if (!props.result) return []
@@ -340,6 +353,11 @@ const signalName = (type) => {
     intraday_trend_sell: '\u65e5\u5185\u8d8b\u52bf\u5356',
   }
   return names[type] || type
+}
+
+const signalPeriodText = (signal) => {
+  if (!signal?.period) return ''
+  return signal.period === '日' ? '日线 ' : `${signal.period}分钟 `
 }
 
 const mergeFutureRows = (items) => {
@@ -498,7 +516,31 @@ const renderChart = () => {
       }
     }
   })
-  const xOfRawIndex = (rawIndex, date) => displayIndexByRawIndex.get(rawIndex) ?? displayIndexByDate.get(date)
+  const nearestDisplayIndexByDate = (date) => {
+    if (!date || !labels.length) return null
+    const exact = displayIndexByDate.get(date)
+    if (exact != null) return exact
+    const target = Date.parse(String(date).replace(' ', 'T'))
+    if (!Number.isFinite(target)) return null
+    let bestIndex = null
+    let bestDistance = Number.POSITIVE_INFINITY
+    labels.forEach((label, index) => {
+      const value = Date.parse(String(label).replace(' ', 'T'))
+      if (!Number.isFinite(value)) return
+      const distance = Math.abs(value - target)
+      if (distance < bestDistance) {
+        bestDistance = distance
+        bestIndex = index
+      }
+    })
+    return bestIndex
+  }
+  const xOfRawIndex = (rawIndex, date, period) => {
+    if (analysisMode.value === 'intraday' && period && period !== intradayPeriod.value) {
+      return nearestDisplayIndexByDate(date)
+    }
+    return displayIndexByRawIndex.get(rawIndex) ?? nearestDisplayIndexByDate(date)
+  }
 
   const candles = bars.map((item, index) => ({
     x: index,
@@ -530,7 +572,7 @@ const renderChart = () => {
   })
   const signalPoints = signals.value
     .map((signal) => {
-      const x = xOfRawIndex(signal.index, signal.date)
+      const x = xOfRawIndex(signal.index, signal.date, signal.period)
       return {
         x,
         y: x == null ? signal.price : visualPriceForSignal(signal, x),
@@ -574,6 +616,7 @@ const drawChart = ({ bars, labels, candles, volumes, strokePoints, signalPoints,
         {
           type: 'candlestick',
           label: analysisMode.value === 'intraday' ? `${intradayPeriod.value}分钟K` : displayMode.value === 'raw' ? '日 K' : '合并 K',
+          kind: 'candle',
           data: candles,
           parsing: false,
           normalized: true,
@@ -587,6 +630,7 @@ const drawChart = ({ bars, labels, candles, volumes, strokePoints, signalPoints,
         {
           type: 'bar',
           label: '成交量',
+          kind: 'volume',
           data: volumes,
           yAxisID: 'volume',
           backgroundColor: (ctx) => (ctx.raw?.direction === 'up' ? 'rgba(216, 74, 74, 0.28)' : 'rgba(28, 155, 99, 0.28)'),
@@ -600,6 +644,7 @@ const drawChart = ({ bars, labels, candles, volumes, strokePoints, signalPoints,
         {
           type: 'line',
           label: '笔线',
+          kind: 'stroke',
           data: strokePoints,
           borderColor: '#1f6feb',
           borderWidth: 3,
@@ -612,6 +657,7 @@ const drawChart = ({ bars, labels, candles, volumes, strokePoints, signalPoints,
         {
           type: 'line',
           label: '买卖点',
+          kind: 'signal',
           data: signalPoints,
           showLine: false,
           pointRadius: 8,
@@ -626,6 +672,7 @@ const drawChart = ({ bars, labels, candles, volumes, strokePoints, signalPoints,
         {
           type: 'line',
           label: '未来锚点',
+          kind: 'futureSignal',
           data: futureSignalPoints,
           showLine: false,
           pointRadius: 9,
@@ -671,21 +718,22 @@ const drawChart = ({ bars, labels, candles, volumes, strokePoints, signalPoints,
               return labels[x] || ''
             },
             label: (context) => {
-              if (context.dataset.label === '买卖点') {
+              if (context.dataset.kind === 'signal') {
                 const signal = context.raw.signal
-                return `${signalName(signal.type)} ${signal.price} ${signal.date}：${signal.reason}`
+                return `${signalPeriodText(signal)}${signalName(signal.type)} ${signal.price} ${signal.date}：${signal.reason}`
               }
-              if (context.dataset.label === '未来锚点') {
+              if (context.dataset.kind === 'futureSignal') {
                 const signal = context.raw.signal
                 return `${signalName(signal.type)} ${signal.price}：${signal.reason}`
               }
-              if (context.dataset.label === '日 K' || context.dataset.label === '合并 K') {
+              if (context.dataset.kind === 'candle') {
                 const x = Math.round(context.parsed?.x ?? context.raw?.x ?? 0)
                 const candle = candles[x]
+                const bar = bars[x]
                 if (!candle) return ''
-                return `开 ${candle.o} 高 ${candle.h} 低 ${candle.l} 收 ${candle.c}`
+                return `开 ${formatPrice(candle.o)} 高 ${formatPrice(candle.h)} 低 ${formatPrice(candle.l)} 收 ${formatPrice(candle.c)} 量 ${formatVolume(bar?.volume)}`
               }
-              if (context.dataset.label === '成交量') {
+              if (context.dataset.kind === 'volume') {
                 return `成交量 ${formatVolume(context.raw?.y)}`
               }
               return `${context.dataset.label}: ${context.parsed.y}`
@@ -781,13 +829,33 @@ const focusSignalRange = (row) => {
 }
 
 const findSignalBarIndex = (row, bars) => {
+  if (analysisMode.value === 'intraday' && row.period && row.period !== intradayPeriod.value) {
+    return findNearestBarIndexByDate(row.date, bars)
+  }
   if (Number.isInteger(row.index) && row.index >= 0 && row.index < bars.length) {
     return row.index
   }
   const date = row.date
   const exact = bars.findIndex((bar) => bar.date === date)
   if (exact >= 0) return exact
-  return null
+  return findNearestBarIndexByDate(date, bars)
+}
+
+const findNearestBarIndexByDate = (date, bars) => {
+  const target = Date.parse(String(date || '').replace(' ', 'T'))
+  if (!Number.isFinite(target)) return null
+  let bestIndex = null
+  let bestDistance = Number.POSITIVE_INFINITY
+  bars.forEach((bar, index) => {
+    const value = Date.parse(String(bar.date || bar.endDate || '').replace(' ', 'T'))
+    if (!Number.isFinite(value)) return
+    const distance = Math.abs(value - target)
+    if (distance < bestDistance) {
+      bestDistance = distance
+      bestIndex = index
+    }
+  })
+  return bestIndex
 }
 
 const getVisibleYBounds = (candles, strokePoints, signalPoints, futureSignalPoints, centerBoxes, start, end) => {
@@ -865,10 +933,12 @@ watch([analysisMode, intradayPeriod], () => {
 
 const ensureIntradayData = async () => {
   if (analysisMode.value !== 'intraday' || !props.result || !props.loadIntraday) return
-  if (props.result?.intraday?.periods?.[intradayPeriod.value]?.rawKlines?.length) return
+  const periods = props.result?.intraday?.periods || {}
+  const hasAllPeriods = intradayPeriodValues.every((period) => periods[period]?.rawKlines?.length)
+  if (hasAllPeriods) return
   intradayLoading.value = true
   try {
-    await props.loadIntraday(intradayPeriod.value)
+    await props.loadIntraday('')
   } finally {
     intradayLoading.value = false
     resetVisibleRange()

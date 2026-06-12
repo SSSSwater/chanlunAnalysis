@@ -53,7 +53,6 @@
                   value-key="label"
                   clearable
                   :debounce="0"
-                  :disabled="stocksLoading"
                   placeholder="例如 000001 或 平安银行"
                   @select="handleSelect"
                 >
