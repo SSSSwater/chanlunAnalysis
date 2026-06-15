@@ -271,8 +271,18 @@ const signalRows = computed(() =>
     ? intradaySignalRows.value
     : props.result?.signalRows || props.result?.signals || [],
 )
-const futureSignals = computed(() => (analysisMode.value === 'intraday' ? [] : props.result?.futureSignals || []))
-const centers = computed(() => (analysisMode.value === 'intraday' ? [] : props.result?.centers || []))
+const intradayFutureSignals = computed(() =>
+  [
+    ...(props.result?.futureSignals || []).map((signal) => ({ ...signal, period: '日' })),
+    ...Object.values(intradayPeriods.value)
+      .flatMap((item) => item?.futureSignals || [])
+      .map((signal) => ({ ...signal, period: signal.period || signal.periodName })),
+  ],
+)
+const futureSignals = computed(() =>
+  analysisMode.value === 'intraday' ? intradayFutureSignals.value : props.result?.futureSignals || [],
+)
+const centers = computed(() => (analysisMode.value === 'intraday' ? intradayData.value?.centers || [] : props.result?.centers || []))
 const sortedSignals = computed(() =>
   [...signalRows.value].sort((a, b) => {
     if (b.date !== a.date) return b.date.localeCompare(a.date)
@@ -562,7 +572,7 @@ const renderChart = () => {
     return signal.direction === 'buy' ? candle.l - spread * 0.32 : candle.h + spread * 0.32
   }
   const strokePoints = []
-  const activeStrokes = analysisMode.value === 'intraday' ? [] : props.result.strokes || []
+  const activeStrokes = analysisMode.value === 'intraday' ? intradayData.value?.strokes || [] : props.result.strokes || []
   activeStrokes.forEach((stroke, index) => {
     const startX = xOfRawIndex(stroke.startIndex, stroke.startDate)
     const endX = xOfRawIndex(stroke.endIndex, stroke.endDate)
@@ -582,7 +592,7 @@ const renderChart = () => {
     .filter((point) => point.x != null)
   const futureSignalPoints = futureSignals.value
     .map((signal) => ({
-      x: xOfRawIndex(signal.index, signal.date) ?? bars.length - 1,
+      x: xOfRawIndex(signal.index, signal.date, signal.period) ?? bars.length - 1,
       y: signal.price,
       signal,
     }))
@@ -724,7 +734,7 @@ const drawChart = ({ bars, labels, candles, volumes, strokePoints, signalPoints,
               }
               if (context.dataset.kind === 'futureSignal') {
                 const signal = context.raw.signal
-                return `${signalName(signal.type)} ${signal.price}：${signal.reason}`
+                return `${signalPeriodText(signal)}${signalName(signal.type)} ${signal.price}：${signal.reason}`
               }
               if (context.dataset.kind === 'candle') {
                 const x = Math.round(context.parsed?.x ?? context.raw?.x ?? 0)

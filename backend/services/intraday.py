@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+try:
+    from .chanlun import analyze_chanlun
+except ImportError:
+    from services.chanlun import analyze_chanlun
+
 
 PERIODS = ("30", "15", "5")
 
@@ -31,17 +36,41 @@ def analyze_intraday(period_bars: dict[str, list[dict]]) -> dict:
 
 def analyze_intraday_period(period: str, bars: list[dict]) -> dict:
     enriched = _with_indicators(bars)
-    signals = _detect_intraday_signals(period, enriched)
+    technical_signals = _detect_intraday_signals(period, enriched)
+    chanlun_result = analyze_chanlun(enriched) if enriched else {}
+    chanlun_signals = _with_period(chanlun_result.get("signals", []), period, "chanlun")
+    technical_signals = _with_period(technical_signals, period, "technical")
+    signals = sorted(
+        [*chanlun_signals, *technical_signals],
+        key=lambda item: (item.get("index", 0), item.get("direction", ""), item.get("type", "")),
+    )
+    signal_rows = sorted(
+        [*_with_period(chanlun_result.get("signalRows", []), period, "chanlun"), *technical_signals],
+        key=lambda item: (item.get("index", 0), item.get("direction", ""), item.get("type", "")),
+    )
+    future_signals = _with_period(chanlun_result.get("futureSignals", []), period, "chanlun")
     return {
         "period": period,
         "rawKlines": enriched,
+        "mergedKlines": chanlun_result.get("mergedKlines", []),
+        "fractals": chanlun_result.get("fractals", []),
+        "strokes": chanlun_result.get("strokes", []),
+        "centers": chanlun_result.get("centers", []),
         "signals": signals,
-        "signalRows": signals,
+        "signalRows": signal_rows,
+        "futureSignals": future_signals,
         "summary": {
             "latestClose": enriched[-1]["close"] if enriched else None,
             "latestRsi": enriched[-1].get("rsi14") if enriched else None,
             "latestMacd": enriched[-1].get("macdHist") if enriched else None,
             "signalCount": len(signals),
+            "chanlunSignalCount": len(chanlun_signals),
+            "technicalSignalCount": len(technical_signals),
+            "futureSignalCount": len(future_signals),
+            "strokeCount": len(chanlun_result.get("strokes", [])),
+            "centerCount": len(chanlun_result.get("centers", [])),
+            "latestCenter": chanlun_result.get("summary", {}).get("latestCenter"),
+            "trend": chanlun_result.get("summary", {}).get("trend"),
             "latestSignal": signals[-1] if signals else None,
         },
         "dateRange": {
@@ -49,6 +78,20 @@ def analyze_intraday_period(period: str, bars: list[dict]) -> dict:
             "end": enriched[-1]["date"] if enriched else "",
         },
     }
+
+
+def _with_period(items: list[dict], period: str, source: str) -> list[dict]:
+    enriched = []
+    for item in items:
+        enriched.append(
+            {
+                **item,
+                "period": item.get("period") or period,
+                "periodName": item.get("periodName") or f"{period}分钟",
+                "source": item.get("source") or source,
+            }
+        )
+    return enriched
 
 
 def _with_indicators(bars: list[dict]) -> list[dict]:
