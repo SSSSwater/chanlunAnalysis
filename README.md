@@ -61,6 +61,14 @@ $env:TUSHARE_HTTP_URL = "https://jiaoch.top/"
 `TUSHARE_HTTP_URL` 默认为 `https://jiaoch.top/`。Tushare 不可用或未配置 Token 时，系统会按
 Tushare、东方财富、腾讯、AkShare 的顺序回退；历史数据仍优先读取本地缓存。
 
+其他环境变量见 [`.env.example`](.env.example)。`BINANCE_CREDENTIAL_ENCRYPTION_KEY` 是应用的
+Fernet 对称密钥，不是 Binance 交易账户的 API Key；它用于加解密数据库中保存的 Binance 凭据，
+重启及迁移已加密数据库时必须保持一致。Render Blueprint 使用该项目当前配置值。Render 不会读取
+`.env.example`：`TUSHARE_TOKEN`、`RESEND_API_KEY`、`RESEND_FROM_EMAIL`、`BREVO_API_KEY` 和代理地址
+需要在 `chanlun-analysis-api` 服务的 Environment 中单独填写。Tushare Token 留空时会回退到其它数据源；
+邮件变量仅在启用邮件通知时需要。REST/WebSocket 代理地址可留空，只有后端需要经由 Render 可访问的
+代理出站时才填写；本机 `127.0.0.1` 代理地址不能供 Render 使用。`BINANCE_BROWSER_CDP_URL` 仅用于本机浏览器认证，不配置到 Render。
+
 ## Local Accounts and Private Data
 
 纪律交易首次使用时需注册本地账户。密码只以安全哈希保存；浏览器保存的登录令牌有效期为 30 天，

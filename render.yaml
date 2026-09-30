@@ -10,6 +10,20 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.7
+      - key: BINANCE_CREDENTIAL_ENCRYPTION_KEY
+        value: mhobAG4HDRUzwjAhZIJ_keTsGUxXUAXpmr4xvlfAGpM=
+      - key: TUSHARE_TOKEN
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_FROM_EMAIL
+        sync: false
+      - key: BREVO_API_KEY
+        sync: false
+      - key: BINANCE_REST_PROXY
+        sync: false
+      - key: BINANCE_WS_PROXY
+        sync: false
 
   - type: web
     name: chanlun-analysis-web
