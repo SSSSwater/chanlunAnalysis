@@ -1,249 +1,131 @@
 from __future__ import annotations
 
+from .price_action import analyze_price_action
+from .price_action_contract import validate_session_continuity
+
 
 PERIODS = ("30", "15", "5")
 
 
 def analyze_intraday(period_bars: dict[str, list[dict]]) -> dict:
-    periods = {}
+    """Apply the same price-action contract to every configured intraday period."""
+
+    periods: dict[str, dict] = {}
     for period, bars in period_bars.items():
         periods[period] = analyze_intraday_period(period, bars)
 
     valid = [item for item in periods.values() if item.get("rawKlines")]
-    latest_signal = _select_latest_signal(valid)
-    bias_score = sum(_period_bias(item) for item in valid)
-    bias = "震荡"
-    if bias_score >= 2:
+    all_signals = [signal for item in valid for signal in item.get("priceAction", {}).get("signals", [])]
+    all_setups = [setup for item in valid for setup in item.get("priceAction", {}).get("setups", [])]
+    latest_signal = sorted(all_signals, key=lambda item: (str(item.get("date") or ""), int(item.get("index") or -1)))[-1] if all_signals else None
+    buy_count = sum(1 for item in all_signals if item.get("direction") == "BUY")
+    sell_count = sum(1 for item in all_signals if item.get("direction") == "SELL")
+    bias = "等待"
+    if buy_count > sell_count:
         bias = "偏多"
-    elif bias_score <= -2:
-        bias = "偏空"
+    elif sell_count > buy_count:
+        bias = "偏下行（卖出管理观察）"
 
+    cross_period = _cross_period_route(periods)
     return {
         "periods": periods,
         "summary": {
             "bias": bias,
             "periodCount": len(valid),
             "latestSignal": latest_signal,
-            "signalCount": sum(len(item.get("signals", [])) for item in valid),
+            "actionableSetupCount": sum(1 for item in all_setups if item.get("status") == "CONFIRMED" and not item.get("reviewRequired")),
+            "reviewRequiredSetupCount": sum(1 for item in all_setups if item.get("reviewRequired")),
+            "signalCount": len(all_signals),
+            "crossPeriodContext": "各周期均使用环境、位置、结构、确认和失效条件；周期结论不替代日线持仓计划。",
+            "dayType": _day_type(periods),
+            "openingContext": _opening_summary(periods),
+            "sessionQuality": {period: (item.get("priceAction", {}).get("sessionQuality") or {}) for period, item in periods.items()},
+            "crossPeriodOwnership": cross_period,
         },
     }
 
 
 def analyze_intraday_period(period: str, bars: list[dict]) -> dict:
-    enriched = _with_indicators(bars)
-    signals = _detect_intraday_signals(period, enriched)
+    result = analyze_price_action(bars, timeframe=f"{period}m")
+    raw_klines = result.get("rawKlines") or []
+    result["period"] = period
+    result["dateRange"] = {
+        "start": raw_klines[0].get("date", "") if raw_klines else "",
+        "end": raw_klines[-1].get("date", "") if raw_klines else "",
+    }
+    pa = result.setdefault("priceAction", {})
+    pa["timeWindow"] = (pa.get("sessionContext") or {}).get("timeWindow", "UNKNOWN")
+    pa["sessionExpiry"] = "SESSION_CLOSE" if period in {"5", "15", "30"} else None
+    pa["intradayDiscipline"] = [
+        "仅使用已经收盘的分钟K；缺少首根/前三根K时不确认开盘结构。",
+        "分钟计划在当日收盘前失效，不自动转成隔日计划。",
+        "11:30、午盘重开和收盘前30-60分钟重新检查滑点、流动性和高周期磁力位。",
+    ]
+    return result
+
+
+def _day_type(periods: dict[str, dict]) -> str:
+    session_patterns = [
+        pattern
+        for item in periods.values()
+        for pattern in item.get("priceAction", {}).get("sessionPatterns", [])
+    ]
+    confirmed = {str(pattern.get("type") or "") for pattern in session_patterns if pattern.get("status") == "CONFIRMED"}
+    if "TREND_DAY" in confirmed:
+        return "TREND_DAY"
+    if "TREND_FROM_RANGE" in confirmed:
+        return "TREND_FROM_RANGE"
+    if "OPENING_REVERSAL" in confirmed:
+        return "OPENING_REVERSAL"
+    if "OPENING_TREND" in confirmed:
+        return "OPENING_TREND"
+    states = [str(item.get("priceAction", {}).get("environment", {}).get("state") or "") for item in periods.values()]
+    if all(state == "RANGE" for state in states if state):
+        return "RANGE_DAY_CANDIDATE"
+    return "OPENING_OR_TRANSITION" if _opening_summary(periods).get("status") == "CONFIRMED" else "UNKNOWN"
+
+
+def _opening_summary(periods: dict[str, dict]) -> dict:
+    contexts = [item.get("priceAction", {}).get("openingContext") or {} for item in periods.values()]
+    valid = [item for item in contexts if item.get("status") == "CONFIRMED"]
+    if not valid:
+        return {"status": "DATA_INSUFFICIENT", "reason": "缺少完整开盘区间或首根K"}
+    first = valid[0]
     return {
-        "period": period,
-        "rawKlines": enriched,
-        "signals": signals,
-        "signalRows": signals,
-        "summary": {
-            "latestClose": enriched[-1]["close"] if enriched else None,
-            "latestRsi": enriched[-1].get("rsi14") if enriched else None,
-            "latestMacd": enriched[-1].get("macdHist") if enriched else None,
-            "signalCount": len(signals),
-            "latestSignal": signals[-1] if signals else None,
-        },
-        "dateRange": {
-            "start": enriched[0]["date"] if enriched else "",
-            "end": enriched[-1]["date"] if enriched else "",
-        },
+        "status": "CONFIRMED",
+        "openingRangeHigh": first.get("openingRangeHigh"),
+        "openingRangeLow": first.get("openingRangeLow"),
+        "gap": first.get("gap"),
+        "dayType": first.get("dayType", "OPENING_RANGE"),
+        "sessionPatterns": [
+            pattern
+            for item in periods.values()
+            for pattern in item.get("priceAction", {}).get("sessionPatterns", [])
+        ],
     }
 
 
-def _with_indicators(bars: list[dict]) -> list[dict]:
-    if not bars:
-        return []
+def _cross_period_route(periods: dict[str, dict]) -> list[dict]:
+    """Keep high-period ownership explicit when minute signals conflict."""
 
-    closes = [float(item["close"]) for item in bars]
-    highs = [float(item["high"]) for item in bars]
-    lows = [float(item["low"]) for item in bars]
-    rsi = _rsi(closes, 14)
-    ema5 = _ema(closes, 5)
-    ema20 = _ema(closes, 20)
-    dif, dea, hist = _macd(closes)
-
-    result = []
-    for index, item in enumerate(bars):
-        prev_close = closes[index - 1] if index > 0 else float(item.get("open") or closes[index])
-        pct_change = (closes[index] - prev_close) / prev_close * 100 if prev_close else 0
-        result.append(
-            {
-                **item,
-                "index": index,
-                "high": highs[index],
-                "low": lows[index],
-                "close": closes[index],
-                "pctChange": round(float(item.get("pctChange", pct_change) or pct_change), 2),
-                "rsi14": _round_or_none(rsi[index]),
-                "ema5": _round_or_none(ema5[index]),
-                "ema20": _round_or_none(ema20[index]),
-                "macdDif": _round_or_none(dif[index]),
-                "macdDea": _round_or_none(dea[index]),
-                "macdHist": _round_or_none(hist[index]),
-            }
-        )
-    return result
-
-
-def _detect_intraday_signals(period: str, bars: list[dict]) -> list[dict]:
-    if len(bars) < 25:
-        return []
-
-    signals = []
-    recent = range(max(1, len(bars) - 24), len(bars))
-    for index in recent:
-        prev = bars[index - 1]
-        current = bars[index]
-        rsi = current.get("rsi14")
-        prev_rsi = prev.get("rsi14")
-        hist = current.get("macdHist")
-        prev_hist = prev.get("macdHist")
-        ema5 = current.get("ema5")
-        ema20 = current.get("ema20")
-        prev_ema5 = prev.get("ema5")
-        prev_ema20 = prev.get("ema20")
-
-        if any(value is None for value in [rsi, prev_rsi, hist, prev_hist, ema5, ema20, prev_ema5, prev_ema20]):
-            continue
-
-        if rsi <= 35 and rsi > prev_rsi and hist > prev_hist:
-            signals.append(
-                _intraday_signal(
-                    "intraday_rebound_buy",
-                    "buy",
-                    period,
-                    current,
-                    "RSI 低位回升，MACD 绿柱收敛，短线有反弹条件",
-                    0.66,
-                )
-            )
-        if prev_ema5 <= prev_ema20 and ema5 > ema20 and rsi >= 48 and hist > 0:
-            signals.append(
-                _intraday_signal(
-                    "intraday_trend_buy",
-                    "buy",
-                    period,
-                    current,
-                    "EMA5 上穿 EMA20，RSI 回到强弱线之上，短线转强",
-                    0.7,
-                )
-            )
-        if rsi >= 68 and rsi < prev_rsi and hist < prev_hist:
-            signals.append(
-                _intraday_signal(
-                    "intraday_pullback_sell",
-                    "sell",
-                    period,
-                    current,
-                    "RSI 高位回落，MACD 红柱收敛，短线有回落风险",
-                    0.66,
-                )
-            )
-        if prev_ema5 >= prev_ema20 and ema5 < ema20 and rsi <= 52 and hist < 0:
-            signals.append(
-                _intraday_signal(
-                    "intraday_trend_sell",
-                    "sell",
-                    period,
-                    current,
-                    "EMA5 下穿 EMA20，RSI 跌回强弱线下方，短线转弱",
-                    0.7,
-                )
-            )
-
-    return _dedupe_intraday_signals(signals)
-
-
-def _intraday_signal(signal_type: str, direction: str, period: str, bar: dict, reason: str, confidence: float) -> dict:
-    return {
-        "type": signal_type,
-        "direction": direction,
-        "date": bar["date"],
-        "index": bar["index"],
-        "price": round(float(bar["close"]), 3),
-        "confidence": confidence,
-        "reason": f"{period} 分钟：{reason}；RSI {bar.get('rsi14')}，MACD柱 {bar.get('macdHist')}",
-        "future": False,
-        "period": period,
-        "rsi14": bar.get("rsi14"),
-        "macdHist": bar.get("macdHist"),
-        "backtestSegmentReturn": 0,
-        "backtestTotalReturn": 0,
-    }
-
-
-def _dedupe_intraday_signals(signals: list[dict]) -> list[dict]:
-    unique = {}
-    for signal in signals:
-        key = (signal["type"], signal["index"])
-        if key not in unique or signal["confidence"] > unique[key]["confidence"]:
-            unique[key] = signal
-    return sorted(unique.values(), key=lambda item: item["index"])
-
-
-def _select_latest_signal(items: list[dict]) -> dict | None:
-    signals = []
-    for item in items:
-        signals.extend(item.get("signals", []))
-    if not signals:
-        return None
-    return sorted(signals, key=lambda item: item["date"])[-1]
-
-
-def _period_bias(item: dict) -> int:
-    latest = item.get("summary", {}).get("latestSignal")
-    if not latest:
-        return 0
-    return 1 if latest.get("direction") == "buy" else -1
-
-
-def _ema(values: list[float], span: int) -> list[float]:
-    if not values:
-        return []
-    alpha = 2 / (span + 1)
-    result = []
-    current = values[0]
-    for value in values:
-        current = value if not result else current * (1 - alpha) + value * alpha
-        result.append(current)
-    return result
-
-
-def _rsi(values: list[float], period: int) -> list[float | None]:
-    result: list[float | None] = [None] * len(values)
-    if len(values) <= period:
-        return result
-    gains = []
-    losses = []
-    for index in range(1, len(values)):
-        change = values[index] - values[index - 1]
-        gains.append(max(change, 0))
-        losses.append(abs(min(change, 0)))
-        if index < period:
-            continue
-        window_gains = gains[index - period : index]
-        window_losses = losses[index - period : index]
-        avg_gain = sum(window_gains) / period
-        avg_loss = sum(window_losses) / period
-        if avg_loss == 0:
-            result[index] = 100.0
-        else:
-            rs = avg_gain / avg_loss
-            result[index] = 100 - 100 / (1 + rs)
-    return result
-
-
-def _macd(values: list[float]) -> tuple[list[float], list[float], list[float]]:
-    ema12 = _ema(values, 12)
-    ema26 = _ema(values, 26)
-    dif = [fast - slow for fast, slow in zip(ema12, ema26)]
-    dea = _ema(dif, 9)
-    hist = [(d - e) * 2 for d, e in zip(dif, dea)]
-    return dif, dea, hist
-
-
-def _round_or_none(value: float | None, digits: int = 3) -> float | None:
-    if value is None:
-        return None
-    return round(float(value), digits)
+    order = {"30": 30, "15": 15, "5": 5}
+    routes: list[dict] = []
+    ranked = sorted(periods.items(), key=lambda item: order.get(item[0], 999))
+    for period, item in ranked:
+        environment = item.get("priceAction", {}).get("environment", {})
+        state = environment.get("state")
+        for signal in item.get("priceAction", {}).get("signals", []):
+            owner = period
+            disposition = "ALLOW_REVIEW"
+            for higher_period, higher in ranked:
+                if order.get(higher_period, 999) >= order.get(period, 999):
+                    continue
+                higher_state = higher.get("priceAction", {}).get("environment", {}).get("state")
+                if higher_state in {"BULL_TREND", "BEAR_TREND"}:
+                    expected = "BUY" if higher_state == "BULL_TREND" else "SELL"
+                    if signal.get("direction") != expected:
+                        owner = higher_period
+                        disposition = "SCALP_OR_NEEDS_REVIEW"
+                        break
+            routes.append({"signalId": signal.get("signalId") or signal.get("type"), "sourcePeriod": period, "ownerPeriod": owner, "disposition": disposition, "executionConstraint": "CASH_LONG_ONLY" if signal.get("direction") == "BUY" else "EXISTING_LONG_ONLY" if signal.get("direction") == "SELL" else "NO_NEW_SHORT", "positionRequired": signal.get("direction") == "SELL", "shortSellingAllowed": False, "reason": "高周期强趋势优先；低周期反向信号不得升级为隔日计划。" if owner != period else "同向或无高周期冲突；卖出信号按持仓卖出/减仓纪律处理。" if signal.get("direction") == "SELL" else "同向或无高周期冲突。"})
+    return routes

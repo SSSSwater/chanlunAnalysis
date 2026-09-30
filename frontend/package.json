@@ -1,12 +1,14 @@
 {
   "name": "chanlun-analysis-frontend",
-  "version": "0.1.0",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --host 127.0.0.1",
+    "dev": "node scripts/run-fixed-vite.mjs dev",
     "build": "vite build",
-    "preview": "vite preview --host 127.0.0.1"
+    "serve": "node serve-dist.mjs",
+    "test:contract": "node --test tests/*.test.mjs",
+    "preview": "node scripts/run-fixed-vite.mjs preview"
   },
   "dependencies": {
     "@vitejs/plugin-vue": "^5.1.2",
@@ -14,9 +16,10 @@
     "chart.js": "^4.4.3",
     "chartjs-chart-financial": "^0.2.1",
     "element-plus": "^2.8.1",
+    "gsap": "^3.15.0",
     "lucide-vue-next": "^0.468.0",
+    "pinyin-pro": "^3.29.3",
     "vite": "^5.4.2",
     "vue": "^3.4.38"
-  },
-  "devDependencies": {}
+  }
 }
